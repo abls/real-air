@@ -1,20 +1,20 @@
 TARGET = demo
 
 CC = gcc
+CPPFLAGS += -pthread -I./deps/cglm/include
+LDFLAGS += -pthread
+LDLIBS += -lm -lhidapi-libusb -lglfw -lGL -lGLEW
 SRCS = $(wildcard src/*.c)
 OBJS = $(SRCS:src/%.c=src/%.o)
-INCS = -I./deps/cglm/include
-LIBS = -lm -lhidapi-libusb -lglfw -lGL -lGLEW
 
 .PHONY: all clean
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) -o $@ $^ $(LIBS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 src/%.o: src/%.c
-	$(CC) $(INCS) -c -o $@ $<
 
 clean:
 	$(RM) $(TARGET) src/*.o

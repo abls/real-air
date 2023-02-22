@@ -1,6 +1,6 @@
 demo opengl program whose camera is controlled using a reverse engineered understanding of the nreal air's imu packet format
 
-completely standalone from nreal's unity sdk, so this supports whateva platform u wanna port it to, not just unity games on android
+completely standalone from nreal's unity sdk, so this supports whateva platform u wanna port it to, not just locked into unity games on android
 
 still need to do sensor fusion, rn I am just using angular velocity data but not accelerometer data. also need to clean the angular velocity data better. after that processing is all cleaned up, I will try to turn this into a reuseable library with a nice api and demote the opengl stuff to an example usage of the library.
 

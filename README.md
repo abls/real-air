@@ -1,21 +1,21 @@
-demo opengl program whose camera is controlled using a reverse engineered understanding of the nreal air's imu packet format
+some files you might like if you like the Nreal Air
 
-completely standalone from nreal's unity sdk, so this supports whateva platform u wanna port it to, not just locked into unity games on android
+## docs
+notes outlining a reverse-engineered understanding of some of the protocol used to communicate with the Nreal Air
 
-still need to do sensor fusion, rn I am just using angular velocity data but not accelerometer data. also need to clean the angular velocity data better. after that processing is all cleaned up, I will try to turn this into a reuseable library with a nice api and demote the opengl stuff to an example usage of the library.
+start reading [here](docs/README.md)
 
-and then if I actually get around to doing all of that lol, I would then use this brand new library to make steamvr and/or monado drivers so that we can use openxr applications
+## code
+a demo opengl program whose camera orientation is controlled by the orientation of a pair of Nreal Air glasses
 
-currently only writing this with linux in mind but an eventual goal is making sure this works cross-platform
+completely standalone from nreal's unity sdk, so this supports any platform you wanna port it to, not just locked into unity games on android
 
----
-
-https://user-images.githubusercontent.com/112491550/220664611-1abeb873-bc96-4269-9b96-61c9a3b2fce9.mp4
-
----
+will turn this into a reuseable library and demote the opengl stuff to an example usage of the library, also might write steamvr or monado drivers
 
 ```
 git submodule update --init
 make
 ./demo
 ```
+
+https://user-images.githubusercontent.com/112491550/220664611-1abeb873-bc96-4269-9b96-61c9a3b2fce9.mp4

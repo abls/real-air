@@ -1,11 +1,12 @@
 TARGET = demo
 
 CC = gcc
-CPPFLAGS += -pthread -I./deps/cglm/include
+CPPFLAGS += -pthread -I./deps/cglm/include -I./deps/Fusion
 LDFLAGS += -pthread
 LDLIBS += -lm -lhidapi-libusb -lglfw -lGL -lGLEW
 SRCS = $(wildcard src/*.c)
-OBJS = $(SRCS:src/%.c=src/%.o)
+FUSS = $(wildcard deps/Fusion/Fusion/*.c)
+OBJS = $(SRCS:src/%.c=src/%.o) $(FUSS:deps/Fusion/Fusion/%.c=deps/Fusion/Fusion/%.o)
 
 .PHONY: all clean
 

@@ -3,6 +3,7 @@
 #include <hidapi/hidapi.h>
 #include <pthread.h>
 #include "cglm/cglm.h"
+#include "Fusion/Fusion.h"
 
 #define AIR_VID 0x3318
 #define AIR_PID 0x0424
@@ -11,15 +12,22 @@
 // ~3906000 tps, packets come every ~3906 ticks, 1000 Hz packets
 #define TICK_LEN (1.0f / 3906000.0f)
 
+// based on 24bit signed int w/ FSR = +/-2000 dps, datasheet option
+#define GYRO_SCALAR (1.0f / 8388608.0f * 2000.0f)
+
+// based on 24bit signed int w/ FSR = +/-16 g, datasheet option
+#define ACCEL_SCALAR (1.0f / 8388608.0f * 16.0f)
+
 static hid_device* device = 0;
 static pthread_t thread = 0;
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 static versor rotation = GLM_QUAT_IDENTITY_INIT;
 static bool running = false;
-
 typedef struct {
-	uint32_t tick;
-	int16_t ang_vel[3];
+	uint64_t uptime;
+	int32_t gyro[3];
+	int32_t accel[3];
+	int16_t mag[3];
 } air_sample;
 
 static int
@@ -30,25 +38,38 @@ parse_report(const unsigned char* buffer, int size, air_sample* out_sample)
 		return -1;
 	}
 
-	buffer += 5;
-	out_sample->tick = *(buffer++) | (*(buffer++) << 8) | (*(buffer++) << 16) | (*(buffer++) << 24);
-	buffer += 10;
-	out_sample->ang_vel[0] = *(buffer++) | (*(buffer++) << 8);
-	buffer++;
-	out_sample->ang_vel[1] = *(buffer++) | (*(buffer++) << 8);
-	buffer++;
-	out_sample->ang_vel[2] = *(buffer++) | (*(buffer++) << 8);
+	out_sample->uptime = buffer[4] | (buffer[5] << 8) | (buffer[6] << 16) | (buffer[7] << 24) |
+											 (buffer[8] << 32) | (buffer[9] << 40) | (buffer[10] << 48) | (buffer[11] << 56);
+
+	out_sample->gyro[0] = buffer[18] | (buffer[19] << 8) | (buffer[20] << 16) | ((buffer[20] & 0x80) ? (0xff << 24) : 0);
+	out_sample->gyro[1] = buffer[21] | (buffer[22] << 8) | (buffer[23] << 16) | ((buffer[23] & 0x80) ? (0xff << 24) : 0);
+	out_sample->gyro[2] = buffer[24] | (buffer[25] << 8) | (buffer[26] << 16) | ((buffer[26] & 0x80) ? (0xff << 24) : 0);
+
+	out_sample->accel[0] = buffer[33] | (buffer[34] << 8) | (buffer[35] << 16) | ((buffer[35] & 0x80) ? (0xff << 24) : 0);
+	out_sample->accel[1] = buffer[36] | (buffer[37] << 8) | (buffer[38] << 16) | ((buffer[38] & 0x80) ? (0xff << 24) : 0);
+	out_sample->accel[2] = buffer[39] | (buffer[40] << 8) | (buffer[41] << 16) | ((buffer[41] & 0x80) ? (0xff << 24) : 0);
+
+	out_sample->mag[0] = buffer[48] | (buffer[49] << 8);
+	out_sample->mag[1] = buffer[50] | (buffer[51] << 8);
+	out_sample->mag[2] = buffer[52] | (buffer[53] << 8);
 
 	return 0;
 }
 
 static void
-process_ang_vel(const int16_t ang_vel[3], vec3 out_vec)
+process_gyro(const int32_t gyro[3], float out_vec[])
 {
-	// these scale and bias corrections are all rough guesses
-	out_vec[0] = (float)(ang_vel[0] + 15) * -0.001f;
-	out_vec[1] = (float)(ang_vel[2] - 6) * 0.001f;
-	out_vec[2] = (float)(ang_vel[1] + 15) * 0.001f;
+	out_vec[0] = (float)(gyro[0]) * GYRO_SCALAR;
+	out_vec[1] = (float)(gyro[1]) * GYRO_SCALAR;
+	out_vec[2] = (float)(gyro[2]) * GYRO_SCALAR;
+}
+
+static void
+process_accel(const int32_t accel[3], float out_vec[])
+{
+	out_vec[0] = (float)(accel[0]) * ACCEL_SCALAR;
+	out_vec[1] = (float)(accel[1]) * ACCEL_SCALAR;
+	out_vec[2] = (float)(accel[2]) * ACCEL_SCALAR;
 }
 
 static hid_device*
@@ -94,9 +115,32 @@ static void*
 track(void* arg)
 {
 	unsigned char buffer[64] = {};
-	uint32_t last_sample_tick = 0;
+	uint64_t last_sample_time = 0;
 	air_sample sample = {};
 	vec3 ang_vel = {};
+
+	// Define calibration (replace with actual calibration data if available)
+	const FusionMatrix gyroscopeMisalignment = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f };
+	const FusionVector gyroscopeSensitivity = { 1.0f, 1.0f, 1.0f };
+	const FusionVector gyroscopeOffset = { 0.0f, 0.0f, 0.0f };
+	const FusionMatrix accelerometerMisalignment = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f };
+	const FusionVector accelerometerSensitivity = { 1.0f, 1.0f, 1.0f };
+	const FusionVector accelerometerOffset = { 0.0f, 0.0f, 0.0f };
+
+	FusionOffset offset;
+	FusionOffsetInitialise(&offset, 1000);
+
+	FusionAhrs fusionAhrs;
+  FusionAhrsInitialise(&fusionAhrs);
+	
+	const FusionAhrsSettings settings = {
+			.convention = FusionConventionEnu,
+			.gain = 0.5f,
+			.accelerationRejection = 10.0f,
+			.magneticRejection = 20.0f,
+			.rejectionTimeout = 5 * 1000,
+	};
+	FusionAhrsSetSettings(&fusionAhrs, &settings);
 
 	while (running) {
 		int res = hid_read(device, (void*)&buffer, sizeof(buffer));
@@ -109,16 +153,38 @@ track(void* arg)
 			continue;
 
 		parse_report(buffer, sizeof(buffer), &sample);
-		process_ang_vel(sample.ang_vel, ang_vel);
 
-		uint32_t tick_delta = 3906;
-		if (last_sample_tick > 0)
-			tick_delta = sample.tick - last_sample_tick;
+		uint64_t time_delta = 3906;
+		if (last_sample_time > 0)
+			time_delta = sample.uptime - last_sample_time;
+		last_sample_time = sample.uptime;
 
-		float dt = tick_delta * TICK_LEN;
-		last_sample_tick = sample.tick;
+		float gyro[3] = {};
+		float accel[3] = {};
 
-		update_rotation(dt, ang_vel);
+		process_gyro(sample.gyro, gyro);
+		process_accel(sample.accel, accel);
+
+		FusionVector gyroscope = (FusionVector){gyro[0], gyro[1], gyro[2]};
+		FusionVector accelerometer = (FusionVector){accel[0], accel[1], accel[2]};
+
+		gyroscope = FusionCalibrationInertial(gyroscope, gyroscopeMisalignment, gyroscopeSensitivity, gyroscopeOffset);
+		accelerometer = FusionCalibrationInertial(accelerometer, accelerometerMisalignment, accelerometerSensitivity, accelerometerOffset);
+
+		gyroscope = FusionOffsetUpdate(&offset, gyroscope);
+
+		FusionAhrsUpdateNoMagnetometer(
+			&fusionAhrs,
+			gyroscope,
+			accelerometer,
+			//time_delta * TICK_LEN
+			1.0f / 1000.0f
+		);
+
+		FusionQuaternion quaternion = FusionAhrsGetQuaternion(&fusionAhrs);
+		pthread_mutex_lock(&mutex);
+		glm_quat_init(rotation, -quaternion.array[1], quaternion.array[3], quaternion.array[2], quaternion.array[0]);
+		pthread_mutex_unlock(&mutex);
 	}
 
 	return 0;
